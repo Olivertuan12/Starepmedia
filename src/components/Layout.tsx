@@ -1,7 +1,7 @@
 import React from 'react';
 import { useAuth } from '../lib/AuthContext';
 import { Outlet, Link, useNavigate } from 'react-router-dom';
-import { LogOut, Home, Folder, Video, Book } from 'lucide-react';
+import { LogOut, Home, Folder, Video, Book, Calendar } from 'lucide-react';
 
 export const Layout = () => {
   const { user, logOut } = useAuth();
@@ -29,6 +29,10 @@ export const Layout = () => {
            <Link to="/roadmap" className="flex items-center gap-2 p-2 text-xs text-white/60 hover:bg-white/5 hover:text-white rounded transition-colors border border-transparent hover:border-white/5 mt-1">
               <Book className="w-4 h-4 text-emerald-400" />
               Roadmap
+           </Link>
+           <Link to="/calendar" className="flex items-center gap-2 p-2 text-xs text-white/60 hover:bg-white/5 hover:text-white rounded transition-colors border border-transparent hover:border-white/5 mt-1">
+              <Calendar className="w-4 h-4 text-orange-400" />
+              Calendar
            </Link>
         </div>
 

@@ -107,6 +107,8 @@ service cloud.firestore {
                    data.description is string && data.description.size() <= 10000 &&
                    data.get('status', 'New Arrival') in ['New Arrival', 'Editing', 'Need Revision', 'Need Improve', 'Approved', 'Delivered'] &&
                    (data.currentVersionId == '' || data.currentVersionId is string) &&
+                   (data.get('eventId', '') == '' || data.eventId is string) &&
+                   (data.get('eventDate', '') == '' || data.eventDate is string) &&
                    data.createdAt is timestamp && data.updatedAt is timestamp;
          }
          
@@ -120,7 +122,7 @@ service cloud.firestore {
                        
          allow update: if isSignedIn() && isProjectMember(projectId) && isValidId(videoId) &&
                        isValidVideo(incoming()) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'currentVersionId', 'status', 'updatedAt']) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'currentVersionId', 'status', 'eventDate', 'eventId', 'updatedAt']) &&
                        incoming().createdAt == existing().createdAt &&
                        incoming().updatedAt == request.time;
                        

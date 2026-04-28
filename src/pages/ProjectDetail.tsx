@@ -4,7 +4,7 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useParams, Link } from 'react-router-dom';
 import { Book, Video, Plus, FileText, Film, MoreVertical, LayoutGrid, CheckSquare, Activity } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 const VIDEO_STATUSES = ['New Arrival', 'Editing', 'Need Revision', 'Need Improve', 'Approved', 'Delivered'];
 
@@ -13,6 +13,24 @@ const VIEWS: Record<string, string[]> = {
   'Editor': ['New Arrival', 'Editing', 'Need Improve', 'Approved'],
   'QC': ['Need Revision', 'Approved'],
   'Deliver': ['Approved', 'Delivered']
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  'New Arrival': 'text-blue-400',
+  'Editing': 'text-purple-400',
+  'Need Revision': 'text-orange-400',
+  'Need Improve': 'text-red-400',
+  'Approved': 'text-emerald-400',
+  'Delivered': 'text-teal-400'
+};
+
+const STATUS_HEX: Record<string, string> = {
+  'New Arrival': '#60a5fa', // blue-400
+  'Editing': '#c084fc', // purple-400
+  'Need Revision': '#fb923c', // orange-400
+  'Need Improve': '#f87171', // red-400
+  'Approved': '#34d399', // emerald-400
+  'Delivered': '#2dd4bf' // teal-400
 };
 
 export const ProjectDetail = () => {
@@ -222,10 +240,13 @@ export const ProjectDetail = () => {
                         />
                         <Bar 
                           dataKey="count" 
-                          fill="#4f46e5" 
                           radius={[2, 2, 0, 0]} 
                           maxBarSize={40}
-                        />
+                        >
+                          {chartData.map((entry, index) => (
+                             <Cell key={`cell-${index}`} fill={STATUS_HEX[entry.name] || '#4f46e5'} />
+                          ))}
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                  </div>
@@ -265,7 +286,7 @@ export const ProjectDetail = () => {
                        onDragOver={onDragOver}
                        onDrop={(e) => onDrop(e, status)}
                      >
-                        <div className="text-[10px] uppercase tracking-widest font-bold text-white/40 mb-3 px-1 flex justify-between items-center">
+                        <div className={`text-[10px] uppercase tracking-widest font-bold mb-3 px-1 flex justify-between items-center ${STATUS_COLORS[status] || 'text-white/40'}`}>
                            <span>{status}</span>
                            <span className="bg-white/5 px-1.5 py-0.5 rounded text-white/60">
                              {videos.filter(v => (v.status || 'New Arrival') === status).length}
@@ -280,12 +301,17 @@ export const ProjectDetail = () => {
                                onDragStart={(e) => onDragStart(e, v.id)}
                                className="bg-[#1A1A1C] p-3 rounded border border-white/10 hover:border-white/20 transition-all cursor-grab active:cursor-grabbing group relative"
                              >
-                                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <Link to={`/projects/${projectId}/videos/${v.id}`} className="text-[9px] uppercase font-bold text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-auto">
+                                  <Link to={`/projects/${projectId}/videos/${v.id}`} className="text-[9px] uppercase font-bold text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 px-1.5 py-0.5 rounded cursor-pointer" onMouseDown={(e) => e.stopPropagation()}>
                                     Open
                                   </Link>
                                 </div>
                                 <h4 className="text-xs font-bold text-white mb-1 pr-10 truncate">{v.name || 'Untitled'}</h4>
+                                {v.eventDate && (
+                                   <div className="text-[9px] text-white/50 mb-1 font-mono uppercase bg-white/5 px-1 inline-block rounded">
+                                      Due: {new Date(v.eventDate).toLocaleDateString()}
+                                   </div>
+                                )}
                                 <p className="text-[10px] text-white/40 font-mono line-clamp-2 leading-relaxed">
                                   {v.description || 'No description provided.'}
                                 </p>
