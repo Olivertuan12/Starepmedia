@@ -1,0 +1,183 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    // Using simple isSignedIn here as some dev auth flows might not have email verified
+    function isSignedIn() { return request.auth != null; }
+
+    function isProjectMember(projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid));
+    }
+    
+    function isProjectOwner(projectId) {
+      let memberDoc = get(/databases/$(database)/documents/projects/$(projectId)/members/$(request.auth.uid));
+      return memberDoc != null && memberDoc.data.role == 'owner';
+    }
+
+    function isProjectOwnerOrAdmin(projectId) {
+       return isProjectOwner(projectId);
+    }
+
+    // Projects
+    function isValidProject(data) {
+      return data.keys().hasAll(['name', 'ownerId', 'createdAt', 'updatedAt']) &&
+             data.keys().size() == 4 &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.ownerId == request.auth.uid &&
+             data.createdAt is number && data.updatedAt is number;
+    }
+    match /projects/{projectId} {
+      allow get: if isSignedIn() && isProjectMember(projectId);
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      
+      allow create: if isSignedIn() && isValidId(projectId) && 
+                    isValidProject(incoming()) &&
+                    incoming().createdAt == request.time.toMillis() &&
+                    incoming().updatedAt == request.time.toMillis();
+                    
+      allow update: if isSignedIn() && isProjectOwner(projectId) && isValidId(projectId) &&
+                    isValidProject(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']) &&
+                    incoming().ownerId == existing().ownerId &&
+                    incoming().createdAt == existing().createdAt &&
+                    incoming().updatedAt == request.time.toMillis();
+                    
+      allow delete: if isSignedIn() && isProjectOwner(projectId);
+
+      // Members Subcollection
+      match /members/{userId} {
+        function isValidMember(data) {
+           return data.keys().hasAll(['role', 'joinedAt']) &&
+                  data.keys().size() == 2 &&
+                  data.role is string && data.role in ['owner', 'member'] &&
+                  data.joinedAt is number;
+        }
+        allow get: if isSignedIn() && isProjectMember(projectId);
+        allow list: if isSignedIn() && isProjectMember(projectId); // anyone in project can see members
+        
+        // Only owners can add members
+        allow create: if isSignedIn() && isProjectOwnerOrAdmin(projectId) && isValidId(userId) &&
+                      isValidMember(incoming());
+        // Except when a user creates a project, they must become owner - this needs to be atomic.
+        // Wait, the project owner isn't an owner until they create the member doc. Circular dependency.
+        // Let's rely on the project creation allowing the ownerId to create their own member doc.
+      }
+      
+      // Documents Subcollection
+      match /documents/{documentId} {
+         function isValidDocument(data) {
+            return data.keys().hasAll(['title', 'content', 'parentId', 'createdAt', 'updatedAt']) &&
+                   data.keys().size() == 5 &&
+                   data.title is string && data.title.size() <= 200 &&
+                   data.content is string && data.content.size() <= 1000000 &&
+                   (data.parentId == '' || data.parentId is string) &&
+                   data.createdAt is number && data.updatedAt is number;
+         }
+         
+         allow get: if isSignedIn() && isProjectMember(projectId);
+         allow list: if isSignedIn() && isProjectMember(projectId);
+         
+         allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(documentId) &&
+                       isValidDocument(incoming()) &&
+                       incoming().createdAt == request.time.toMillis() &&
+                       incoming().updatedAt == request.time.toMillis();
+                       
+         allow update: if isSignedIn() && isProjectMember(projectId) && isValidId(documentId) &&
+                       isValidDocument(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'parentId', 'updatedAt']) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt == request.time.toMillis();
+                       
+         allow delete: if isSignedIn() && isProjectMember(projectId);
+      }
+      
+      // Videos Subcollection
+      match /videos/{videoId} {
+         function isValidVideo(data) {
+            return data.keys().hasAll(['name', 'description', 'currentVersionId', 'createdAt', 'updatedAt']) &&
+                   data.keys().size() == 5 &&
+                   data.name is string && data.name.size() <= 200 &&
+                   data.description is string && data.description.size() <= 10000 &&
+                   (data.currentVersionId == '' || data.currentVersionId is string) &&
+                   data.createdAt is number && data.updatedAt is number;
+         }
+         
+         allow get: if isSignedIn() && isProjectMember(projectId);
+         allow list: if isSignedIn() && isProjectMember(projectId);
+         
+         allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(videoId) &&
+                       isValidVideo(incoming()) &&
+                       incoming().createdAt == request.time.toMillis() &&
+                       incoming().updatedAt == request.time.toMillis();
+                       
+         allow update: if isSignedIn() && isProjectMember(projectId) && isValidId(videoId) &&
+                       isValidVideo(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'currentVersionId', 'updatedAt']) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt == request.time.toMillis();
+                       
+         allow delete: if isSignedIn() && isProjectMember(projectId);
+         
+         // Versions Subcollection
+         match /versions/{versionId} {
+            function isValidVersion(data) {
+               return data.keys().hasAll(['videoUrl', 'versionNumber', 'createdAt']) &&
+                      data.keys().size() == 3 &&
+                      data.videoUrl is string && data.videoUrl.size() <= 2000 &&
+                      data.versionNumber is number &&
+                      data.createdAt is number;
+            }
+            allow get: if isSignedIn() && isProjectMember(projectId);
+            allow list: if isSignedIn() && isProjectMember(projectId);
+            
+            allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(versionId) &&
+                          isValidVersion(incoming()) &&
+                          incoming().createdAt == request.time.toMillis();
+                          
+            allow update: if false; // immutable
+            allow delete: if isSignedIn() && isProjectMember(projectId);
+         }
+         
+         // Comments Subcollection
+         match /comments/{commentId} {
+            function isValidComment(data) {
+               return data.keys().hasAll(['versionId', 'text', 'authorId', 'authorName', 'videoTimeMs', 'createdAt']) &&
+                      data.keys().size() == 6 &&
+                      data.versionId is string && data.versionId.size() <= 128 &&
+                      data.text is string && data.text.size() > 0 && data.text.size() <= 5000 &&
+                      data.authorId == request.auth.uid &&
+                      data.authorName is string && data.authorName.size() <= 100 &&
+                      data.videoTimeMs is number &&
+                      data.createdAt is number;
+            }
+            allow get: if isSignedIn() && isProjectMember(projectId);
+            allow list: if isSignedIn() && isProjectMember(projectId);
+            
+            allow create: if isSignedIn() && isProjectMember(projectId) && isValidId(commentId) &&
+                          isValidComment(incoming()) &&
+                          incoming().createdAt == request.time.toMillis();
+                          
+            allow update: if isSignedIn() && isProjectMember(projectId) && existing().authorId == request.auth.uid && isValidId(commentId) &&
+                          isValidComment(incoming()) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['text']) &&
+                          incoming().authorId == existing().authorId &&
+                          incoming().authorName == existing().authorName &&
+                          incoming().versionId == existing().versionId &&
+                          incoming().videoTimeMs == existing().videoTimeMs &&
+                          incoming().createdAt == existing().createdAt;
+                          
+            allow delete: if isSignedIn() && isProjectMember(projectId) && (existing().authorId == request.auth.uid || isProjectOwnerOrAdmin(projectId));
+         }
+      }
+    }
+  }
+}

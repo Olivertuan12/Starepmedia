@@ -1,0 +1,6 @@
+{
+  "name": "SyncSpace",
+  "description": "A project management tool combining Notion and Frame.io features for document and video feedback",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
