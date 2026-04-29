@@ -14,6 +14,9 @@ import { VideoDetail } from './pages/VideoDetail';
 import { DocumentDetail } from './pages/DocumentDetail';
 import { FeaturePlanning } from './pages/FeaturePlanning';
 import { CalendarView } from './pages/CalendarView';
+import { Tasks } from './pages/Tasks';
+import { Settings } from './pages/Settings';
+import { Customers } from './pages/Customers';
 
 const PrivateRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
@@ -35,6 +38,9 @@ export default function App() {
              <Route path="/projects/:projectId/videos/:videoId" element={<VideoDetail />} />
              <Route path="/roadmap" element={<FeaturePlanning />} />
              <Route path="/calendar" element={<CalendarView />} />
+             <Route path="/customers" element={<Customers />} />
+             <Route path="/tasks" element={<Tasks />} />
+             <Route path="/settings" element={<Settings />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -72,9 +72,41 @@
         "createdAt": { "type": "integer" }
       },
       "required": ["versionId", "text", "authorId", "videoTimeMs", "createdAt", "authorName"]
+    },
+    "CalendarEvent": {
+      "title": "CalendarEvent",
+      "description": "A Google Calendar event synced to the database with Order details",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "date": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "htmlLink": { "type": "string" },
+        "type": { "type": "string" },
+        "updatedAt": { "type": "integer" },
+        "clientName": { "type": "string" },
+        "clientEmail": { "type": "string" },
+        "clientPhone": { "type": "string" },
+        "shooter": { "type": "string" },
+        "uploadLink": { "type": "string" },
+        "finalLink": { "type": "string" },
+        "editor": { "type": "string" },
+        "sentMailToEditor": { "type": "boolean" },
+        "status": { "type": "string" },
+        "music": { "type": "string" },
+        "notes": { "type": "string" },
+        "tasks": { "type": "array" },
+        "progress": { "type": "integer" }
+      },
+      "required": ["title", "date", "updatedAt"]
     }
   },
   "firestore": {
+    "users/{userId}/calendar_events/{eventId}": {
+      "schema": { "$ref": "#/entities/CalendarEvent" },
+      "description": "Synced calendar events for a user"
+    },
     "projects/{projectId}": {
       "schema": { "$ref": "#/entities/Project" },
       "description": "Projects workspace"

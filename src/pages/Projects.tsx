@@ -12,6 +12,7 @@ export const Projects = () => {
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     if (!user) return;
@@ -63,12 +64,27 @@ export const Projects = () => {
     }
   };
 
+  const filteredProjects = projects.filter(p => 
+    (p.name || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   if (loading) return <div className="p-8">Loading projects...</div>;
 
   return (
     <div className="p-6 max-w-6xl mx-auto w-full h-full flex flex-col relative">
-       <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
-         <h1 className="text-xl font-bold tracking-widest text-[#E0E0E0] uppercase text-[11px]">Your Projects</h1>
+       <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 border-b border-white/5 pb-4 gap-4">
+         <div className="flex items-center gap-4 flex-1">
+            <h1 className="text-xl font-bold tracking-widest text-[#E0E0E0] uppercase text-[11px] whitespace-nowrap">Your Projects</h1>
+            <div className="relative flex-1 max-w-sm">
+               <input 
+                 type="text"
+                 placeholder="Search projects..."
+                 value={searchQuery}
+                 onChange={(e) => setSearchQuery(e.target.value)}
+                 className="w-full bg-white/5 border border-white/10 rounded-full py-1.5 px-4 text-[10px] text-white focus:outline-none focus:border-indigo-500/50 transition-all font-mono"
+               />
+            </div>
+         </div>
          <button 
            onClick={() => setIsCreating(true)}
            className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-4 py-1.5 rounded-md transition-colors flex items-center gap-2 text-xs"
@@ -102,17 +118,17 @@ export const Projects = () => {
          </motion.form>
        )}
 
-       {projects.length === 0 && !isCreating ? (
+       {filteredProjects.length === 0 && !isCreating ? (
          <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-white/10 rounded p-12 text-center bg-[#121214]">
             <div className="w-12 h-12 bg-black rounded flex items-center justify-center mb-4 border border-white/5">
               <Folder className="w-6 h-6 text-indigo-400" />
             </div>
-            <h3 className="text-xs font-bold text-white tracking-widest uppercase">No projects</h3>
-            <p className="text-[10px] text-white/40 mt-1 uppercase font-mono max-w-xs">Create your first project to start managing documents and videos.</p>
+            <h3 className="text-xs font-bold text-white tracking-widest uppercase">No projects found</h3>
+            <p className="text-[10px] text-white/40 mt-1 uppercase font-mono max-w-xs">{searchQuery ? 'Try adjusting your search query.' : 'Create your first project to start managing documents and videos.'}</p>
          </div>
        ) : (
          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-           {projects.map(proj => (
+           {filteredProjects.map(proj => (
              <Link 
                key={proj.id} 
                to={`/projects/${proj.id}`}

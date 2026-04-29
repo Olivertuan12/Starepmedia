@@ -22,6 +22,43 @@ service cloud.firestore {
       return memberDoc != null && memberDoc.data.role == 'owner';
     }
 
+    // Users and Calendar Events
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      
+      match /calendar_events/{eventId} {
+        function isValidCalendarEvent(data) {
+          return data.keys().hasAll(['title', 'date', 'updatedAt']) &&
+                 data.title is string && data.title.size() <= 1000 &&
+                 data.date is string && data.date.size() <= 100 &&
+                 (data.get('description', '') == '' || (data.description is string && data.description.size() <= 10000)) &&
+                 (data.get('location', '') == '' || (data.location is string && data.location.size() <= 1000)) &&
+                 (data.get('htmlLink', '') == '' || (data.htmlLink is string && data.htmlLink.size() <= 2000)) &&
+                 (data.get('type', '') == '' || (data.type is string && data.type.size() <= 50)) &&
+                 (data.get('clientName', '') == '' || (data.clientName is string && data.clientName.size() <= 200)) &&
+                 (data.get('clientEmail', '') == '' || (data.clientEmail is string && data.clientEmail.size() <= 200)) &&
+                 (data.get('clientPhone', '') == '' || (data.clientPhone is string && data.clientPhone.size() <= 50)) &&
+                 (data.get('shooter', '') == '' || (data.shooter is string && data.shooter.size() <= 100)) &&
+                 (data.get('uploadLink', '') == '' || (data.uploadLink is string && data.uploadLink.size() <= 2000)) &&
+                 (data.get('finalLink', '') == '' || (data.finalLink is string && data.finalLink.size() <= 2000)) &&
+                 (data.get('editor', '') == '' || (data.editor is string && data.editor.size() <= 100)) &&
+                 (data.get('sentMailToEditor', false) is bool) &&
+                 (data.get('status', '') == '' || (data.status is string && data.status.size() <= 50)) &&
+                 (data.get('music', '') == '' || (data.music is string && data.music.size() <= 500)) &&
+                 (data.get('notes', '') == '' || (data.notes is string && data.notes.size() <= 10000)) &&
+                 (data.get('tasks', []) is list) &&
+                 (data.get('progress', 0) is number) &&
+                 data.updatedAt is timestamp;
+        }
+
+        allow get, list: if isSignedIn() && request.auth.uid == userId;
+        
+        allow write: if isSignedIn() && request.auth.uid == userId && isValidId(eventId) &&
+                      isValidCalendarEvent(incoming()) &&
+                      incoming().updatedAt == request.time;
+      }
+    }
+
     // Projects
     function isValidProject(data) {
       return data.keys().hasAll(['name', 'ownerId', 'createdAt', 'updatedAt']) &&

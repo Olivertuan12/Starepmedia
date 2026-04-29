@@ -141,9 +141,24 @@ export const ProjectDetail = () => {
   return (
     <div className="flex-1 flex flex-col h-full bg-[#0A0A0B] overflow-y-auto">
        <div className="p-6 w-full max-w-[1600px] mx-auto min-h-full flex flex-col">
-          <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
-            <h1 className="text-[11px] font-bold uppercase tracking-widest text-[#E0E0E0] opacity-80 mb-2">Project Workspace</h1>
-            <p className="text-[10px] text-white/40 uppercase font-mono tracking-tighter">Unified management</p>
+          <div className="flex flex-col md:flex-row items-center justify-between mb-8 pb-6 border-b border-white/5 gap-4">
+            <div className="flex flex-col gap-1">
+               <h1 className="text-xl font-bold uppercase tracking-[0.2em] text-white">Project Interface</h1>
+               <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                  <p className="text-[10px] text-white/40 uppercase font-mono tracking-widest">Unified media management and narrative control</p>
+               </div>
+            </div>
+            <div className="flex items-center gap-3 bg-[#121214] p-2 rounded-lg border border-white/5">
+               <div className="flex flex-col items-end px-3 border-r border-white/5">
+                  <span className="text-[9px] uppercase font-bold text-white/20 tracking-widest">Assets</span>
+                  <span className="text-xs font-mono text-white">{videos.length + documents.length}</span>
+               </div>
+               <div className="flex flex-col items-end px-3">
+                  <span className="text-[9px] uppercase font-bold text-white/20 tracking-widest">Status</span>
+                  <span className="text-xs font-mono text-indigo-400">Active Pipeline</span>
+               </div>
+            </div>
           </div>
 
           <div className="flex flex-col gap-6 flex-1 min-h-0">
