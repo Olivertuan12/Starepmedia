@@ -23,6 +23,7 @@ export const CalendarView = () => {
   
   const [view, setView] = useState<'month' | 'week'>('month');
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [shooterFilter, setShooterFilter] = useState<string>('All');
   
   const [accessToken, setAccessToken] = useState<string | null>(localStorage.getItem('google_calendar_token'));
   const [isLoadingEvents, setIsLoadingEvents] = useState(false);
@@ -116,7 +117,7 @@ export const CalendarView = () => {
     });
 
     // 4. Photographers
-    const photoMatch = description.match(/Photographers[:\s\r\n=]+([\s\S]*?)(?:$)/i);
+    const photoMatch = description.match(/(?:Photographers|Photographer|Shooter)s?[:\s\r\n=]+([^<]*)/i);
     if (photoMatch) sections.photographers = photoMatch[1].replace(/<[^>]*>?/gm, '').trim();
 
     // 5. Fallback Intake (HTML list)
@@ -133,6 +134,12 @@ export const CalendarView = () => {
            };
         }).filter(p => p.q && p.a);
       }
+    }
+
+    // 6. Client Email
+    const emailMatch = description.match(/([a-zA-Z0-9.-]+@[a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+)/i);
+    if (emailMatch) {
+      sections.clientEmail = emailMatch[1];
     }
 
     return sections;
@@ -204,41 +211,57 @@ export const CalendarView = () => {
       const timeMin = startOfMonth(subMonths(currentDate, 1)).toISOString();
       const timeMax = endOfMonth(addMonths(currentDate, 6)).toISOString();
       
-      const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Google Calendar API Error:", errorData);
-        if (response.status === 401) setAccessToken(null);
-        setIsLoadingEvents(false);
-        return;
+      const calendarsToFetch = [
+        { id: 'primary', shooter: 'Kyle' },
+        { id: 'jack@starepmedia.com', shooter: 'Jack' }
+      ];
+
+      let allFreshEvents: any[] = [];
+
+      for (let i = 0; i < calendarsToFetch.length; i++) {
+        const cal = calendarsToFetch[i];
+        try {
+          const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(cal.id)}/events?timeMin=${timeMin}&timeMax=${timeMax}&singleEvents=true&orderBy=startTime`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          
+          if (!response.ok) {
+            console.error(`Google Calendar API Error for ${cal.id}:`, await response.text());
+            if (response.status === 401) setAccessToken(null);
+            continue;
+          }
+
+          const data = await response.json();
+          if (data.items) {
+             const freshEvents = data.items.map((item: any) => {
+               const extracted = extractClientInfo(item.description || '');
+               return {
+                 id: item.id,
+                 title: item.summary || 'Untitled Event',
+                 date: item.start.dateTime || item.start.date,
+                 description: item.description || '',
+                 location: item.location || '',
+                 htmlLink: item.htmlLink || '',
+                 type: item.eventType || 'meeting',
+                 colorId: item.colorId || null,
+                 calendarId: cal.id,
+                 calendarShooter: cal.shooter,
+                 clientName: extracted.name,
+                 clientEmail: extracted.email,
+                 clientPhone: extracted.phone
+               };
+             }).filter((e: any) => e.date);
+             allFreshEvents = [...allFreshEvents, ...freshEvents];
+          }
+        } catch(err) {
+          console.error("Error fetching for calendar", cal.id, err);
+        }
       }
-
-      const data = await response.json();
-
-      if (data.items) {
-        const freshEvents = data.items.map((item: any) => {
-          const extracted = extractClientInfo(item.description || '');
-          return {
-            id: item.id,
-            title: item.summary || 'Untitled Event',
-            date: item.start.dateTime || item.start.date,
-            description: item.description || '',
-            location: item.location || '',
-            htmlLink: item.htmlLink || '',
-            type: 'meeting',
-            clientName: extracted.name,
-            clientEmail: extracted.email,
-            clientPhone: extracted.phone
-          };
-        }).filter((e: any) => e.date);
-        
-        if (user && freshEvents.length > 0) {
-          const total = freshEvents.length;
-          for (let i = 0; i < total; i++) {
-            const evt = freshEvents[i];
+      
+      if (user && allFreshEvents.length > 0) {
+        const total = allFreshEvents.length;
+        for (let i = 0; i < total; i++) {
+          const evt = allFreshEvents[i];
             try {
               await setDoc(doc(db, `users/${user.uid}/calendar_events`, evt.id), {
                 ...evt,
@@ -269,7 +292,7 @@ export const CalendarView = () => {
               for (const vidDoc of vidsSnapshot.docs) {
                 const vidData = vidDoc.data();
                 if (vidData.eventId) {
-                  const matchingEvent = freshEvents.find((evt: any) => evt.id === vidData.eventId);
+                  const matchingEvent = allFreshEvents.find((evt: any) => evt.id === vidData.eventId);
                   if (matchingEvent && matchingEvent.date !== vidData.eventDate) {
                     await updateDoc(doc(db, `projects/${proj.id}/videos/${vidDoc.id}`), {
                       eventDate: matchingEvent.date,
@@ -283,7 +306,6 @@ export const CalendarView = () => {
             }
           }
         }
-      }
     } catch (e) {
       console.error("Fetch Exception:", e);
     } finally {
@@ -344,10 +366,37 @@ export const CalendarView = () => {
     }
   };
 
+  const getEventShooter = (e: any) => {
+    // Determine shooter based on explicit value, calendar attribution, description, or title
+    if (e.shooter) return e.shooter;
+    if (e.calendarShooter) return e.calendarShooter;
+    
+    const parsed = parseDescriptionSections(e.description || '');
+    if (parsed.photographers) {
+      if (parsed.photographers.toLowerCase().includes('kyle')) return 'Kyle';
+      if (parsed.photographers.toLowerCase().includes('jack')) return 'Jack';
+      return parsed.photographers;
+    }
+    
+    // Fallback: check title and description
+    const textToSearch = ((e.title || '') + ' ' + (e.description || '')).toLowerCase();
+    if (textToSearch.includes('kyle')) return 'Kyle';
+    if (textToSearch.includes('jack')) return 'Jack';
+    
+    // Default to Kyle since legacy primary calendar events belong to the CEO
+    return 'Kyle';
+  };
+
+  const getShooterColor = (shooter: string) => {
+    const s = shooter.toLowerCase();
+    if (s.includes('kyle')) return 'bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.6)]';
+    if (s.includes('jack')) return 'bg-fuchsia-400 shadow-[0_0_8px_rgba(232,121,249,0.6)]';
+    return 'bg-white/20';
+  };
+
   const generateStoragePath = (event: any) => {
     if (!event) return '';
-    const parsed = parseDescriptionSections(event.description);
-    const shooter = parsed.photographers || event.shooter || 'Unknown_Shooter';
+    const shooter = getEventShooter(event);
     const date = format(parseISO(event.date), 'MM-dd-yyyy');
     const orderName = (event.location || event.title).replace(/[^a-zA-Z0-9\s-]/g, '').trim();
     return `syncspace / ${shooter} / ${date} / ${orderName}`;
@@ -358,6 +407,14 @@ export const CalendarView = () => {
 
   const filteredEvents = events.filter(e => {
     const searchLower = searchQuery.toLowerCase();
+    
+    if (shooterFilter !== 'All') {
+      const eventShooter = getEventShooter(e);
+      if (!eventShooter.toLowerCase().includes(shooterFilter.toLowerCase())) {
+        return false;
+      }
+    }
+    
     return (
       (e.title || '').toLowerCase().includes(searchLower) ||
       (e.location || '').toLowerCase().includes(searchLower) ||
@@ -393,7 +450,18 @@ export const CalendarView = () => {
 
   const handleToggleTask = async (eventId: string, taskId: string) => {
     if (!selectedEvent) return;
-    const newTasks = (selectedEvent.tasks || []).map((t: any) => 
+    
+    let currentTasks = selectedEvent.tasks || [];
+    if (currentTasks.length === 0) {
+      const parsed = parseDescriptionSections(selectedEvent.description || '');
+      if (parsed.items && parsed.items.length > 0) {
+        currentTasks = parsed.items.map((item: string, i: number) => ({ id: `item-${i}`, text: item, done: false }));
+      } else {
+        currentTasks = defaultTasks;
+      }
+    }
+
+    const newTasks = currentTasks.map((t: any) => 
       t.id === taskId ? { ...t, done: !t.done } : t
     );
     const newProgress = calculateProgress(newTasks);
@@ -485,16 +553,42 @@ export const CalendarView = () => {
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative bg-[#080809] p-5 gap-5">
         {/* Calendar Section */}
         <div className="flex-1 flex flex-col gap-4 overflow-hidden">
-           {/* Search Input Lowered */}
-           <div className="relative group max-w-xl">
-              <Plus className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-white/20 group-focus-within:text-indigo-400 transition-colors" />
-              <input 
-                type="text"
-                placeholder="Search orders, clients, locations..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-[#121214] border border-white/5 rounded-xl py-3.5 pl-12 pr-4 text-[11px] text-white focus:outline-none focus:border-indigo-500/30 transition-all shadow-xl"
-              />
+           {/* Search and Filters */}
+           <div className="flex gap-3 max-w-2xl">
+              <div className="relative group flex-1">
+                 <Plus className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-white/20 group-focus-within:text-indigo-400 transition-colors" />
+                 <input 
+                   type="text"
+                   placeholder="Search orders, clients, locations..."
+                   value={searchQuery}
+                   onChange={(e) => setSearchQuery(e.target.value)}
+                   className="w-full bg-[#121214] border border-white/5 rounded-xl py-3.5 pl-12 pr-4 text-[11px] text-white focus:outline-none focus:border-indigo-500/30 transition-all shadow-xl"
+                 />
+              </div>
+              <div className="flex items-center gap-2">
+                 {['Kyle', 'Jack'].map(shooter => (
+                   <button
+                     key={shooter}
+                     onClick={() => setShooterFilter(shooterFilter === shooter ? 'All' : shooter)}
+                     className={`flex items-center gap-2 px-4 py-3 rounded-xl border text-[11px] font-black uppercase tracking-widest transition-all shadow-xl ${
+                       shooterFilter === shooter
+                         ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-400'
+                         : 'bg-[#121214] border-white/5 text-white/50 hover:text-white hover:border-white/20'
+                     }`}
+                   >
+                     {shooter}
+                     {shooterFilter === shooter && (
+                       <span 
+                         className="ml-1 text-white/40 hover:text-white flex items-center justify-center bg-black/20 rounded-full w-4 h-4 transition-colors" 
+                         onClick={(e) => { e.stopPropagation(); setShooterFilter('All'); }}
+                         role="button"
+                       >
+                         <Plus className="w-3 h-3 rotate-45" />
+                       </span>
+                     )}
+                   </button>
+                 ))}
+              </div>
            </div>
 
            <div className="flex-1 flex flex-col border border-white/5 rounded-2xl overflow-hidden bg-[#121214] shadow-2xl">
@@ -506,7 +600,7 @@ export const CalendarView = () => {
                 ))}
               </div>
               <div className="flex-1 overflow-y-auto custom-scrollbar bg-[#0A0A0B]">
-                 <div className="grid grid-cols-7 w-full shrink-0">
+                 <div className="grid grid-cols-7 auto-rows-fr w-full min-h-full">
                    {(() => {
                       const start = view === 'month' ? startOfWeek(startOfMonth(currentDate), { weekStartsOn: 1 }) : startOfWeek(currentDate, { weekStartsOn: 1 });
                       const end = view === 'month' ? endOfWeek(endOfMonth(currentDate), { weekStartsOn: 1 }) : endOfWeek(currentDate, { weekStartsOn: 1 });
@@ -539,6 +633,7 @@ export const CalendarView = () => {
                             <div className="space-y-0.5 px-1 overflow-y-auto custom-scrollbar-thin">
                               {dayEvents.slice(0, 4).map(evt => {
                                  const config = getStatusConfig(evt.isArchived ? 'Archived' : evt.status);
+                                 const shooterColor = getShooterColor(getEventShooter(evt));
                                  return (
                                    <div 
                                      key={evt.id} 
@@ -546,8 +641,9 @@ export const CalendarView = () => {
                                        e.stopPropagation();
                                        setSelectedEventId(evt.id);
                                      }}
-                                     className={`relative border rounded px-1.5 py-1 transition-all cursor-pointer ${config.bg} ${config.text} ${config.border} hover:scale-[1.02] shadow-sm`}
+                                     className={`relative border rounded px-1.5 py-1 transition-all cursor-pointer ${config.bg} ${config.text} ${config.border} hover:scale-[1.02] shadow-sm flex items-center gap-1.5`}
                                    >
+                                      <div className={`w-1.5 h-1.5 rounded-full ${shooterColor} shrink-0`} />
                                       <div className="text-[9px] font-black truncate uppercase tracking-tight leading-none">
                                         {evt.location || evt.title}
                                       </div>
@@ -597,8 +693,11 @@ export const CalendarView = () => {
                                 <div className="absolute top-0 right-0 w-16 h-16 bg-indigo-500/[0.03] blur-xl rounded-full -mr-8 -mt-8" />
                                 <div className="flex justify-between items-start mb-3 relative">
                                    <div className="text-[9px] font-mono text-white/30 uppercase">{format(parseISO(evt.date), 'HH:mm')}</div>
-                                   <div className={`px-1.5 py-0.5 rounded text-[7px] font-black uppercase tracking-wider ${config.bg} ${config.text}`}>
-                                      {config.label}
+                                   <div className="flex items-center gap-2">
+                                      <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${getShooterColor(getEventShooter(evt))}`} />
+                                      <div className={`px-1.5 py-0.5 rounded text-[7px] font-black uppercase tracking-wider ${config.bg} ${config.text}`}>
+                                         {config.label}
+                                      </div>
                                    </div>
                                 </div>
                                 <div className="text-[10px] font-black text-white uppercase tracking-tight truncate mb-1">
@@ -671,82 +770,89 @@ export const CalendarView = () => {
               >
                  {/* Modal Header */}
                  <div className="px-8 py-5 bg-[#0D0D0E]/90 border-b border-white/5 relative shrink-0">
-                    <div className="absolute top-5 right-8 flex items-center gap-2">
-                       <button 
-                         onClick={() => handleUpdateOrder(selectedEvent.id, { isArchived: !selectedEvent.isArchived })}
-                         className={`p-1.5 rounded-lg transition-all ${
-                            selectedEvent.isArchived 
-                              ? 'bg-amber-500/20 text-amber-500' 
-                              : 'text-white/20 hover:text-white hover:bg-white/5'
-                         }`}
-                         title={selectedEvent.isArchived ? "Unarchive" : "Archive"}
-                       >
-                          <Archive className="w-5 h-5" />
-                       </button>
-                       <button 
-                         onClick={() => setSelectedEventId(null)}
-                         className="p-1.5 text-white/20 hover:text-white hover:bg-white/5 rounded-lg transition-all"
-                       >
-                          <Plus className="w-5 h-5 rotate-45" />
-                       </button>
-                    </div>
-
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                       <div className="flex items-center gap-5">
-                          <div className={`w-10 h-10 rounded-xl ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).bg} border ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).border} flex items-center justify-center shadow-lg`}>
-                             <Calendar className={`w-5 h-5 ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).text}`} />
-                          </div>
-                          <div className="space-y-0.5">
-                             <div className={`text-[9px] font-mono uppercase tracking-[0.3em] ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).text} font-black opacity-60`}>
-                                {selectedEvent.isArchived ? 'ARCHIVED SESSION' : (`${getStatusConfig(selectedEvent.status).label} / ORDER SUMMARY`)}
+                    <div className="flex flex-col gap-4">
+                       {/* Top Row: Meta & Controls */}
+                       <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                             <div className={`px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).bg} ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).text} border ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).border}`}>
+                                {selectedEvent.isArchived ? 'ARCHIVED SESSION' : getStatusConfig(selectedEvent.status).label}
                              </div>
-                             <h2 className="text-2xl font-black text-white uppercase tracking-tighter leading-tight max-w-2xl">
-                                {selectedEvent.location || selectedEvent.title}
-                             </h2>
+                             <div className="px-2 py-1 rounded text-[9px] font-black uppercase tracking-widest bg-white/5 text-white/60 border border-white/5">
+                                SHOOTER: {getEventShooter(selectedEvent)}
+                             </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                             <button 
+                               onClick={() => handleUpdateOrder(selectedEvent.id, { isArchived: !selectedEvent.isArchived })}
+                               className={`px-3 py-1.5 rounded transition-all text-[9px] font-black uppercase tracking-widest border flex items-center gap-2 ${
+                                  selectedEvent.isArchived 
+                                    ? 'bg-amber-500/20 text-amber-500 border-amber-500/30 hover:bg-amber-500/30' 
+                                    : 'bg-white/5 text-white/40 border-white/5 hover:text-white hover:bg-white/10'
+                               }`}
+                             >
+                                <Archive className="w-3 h-3" />
+                                {selectedEvent.isArchived ? "UNARCHIVE" : "ARCHIVE"}
+                             </button>
+                             <button 
+                               onClick={() => setSelectedEventId(null)}
+                               className="p-1.5 text-white/40 hover:text-white hover:bg-red-500/20 rounded transition-all ml-2"
+                             >
+                                <Plus className="w-5 h-5 rotate-45" />
+                             </button>
                           </div>
                        </div>
                        
-                       <div className="flex items-center gap-4">
-                          <div className="flex flex-col items-end">
-                             <div className="flex items-center gap-1.5 text-[10px] font-mono text-white/40">
-                                <Clock className="w-3 h-3" />
-                                {format(parseISO(selectedEvent.date), 'MMM do, yyyy @ HH:mm')}
+                       {/* Main Title Row */}
+                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mt-2">
+                          <div className="flex items-center gap-5">
+                             <div className={`w-10 h-10 rounded-xl ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).bg} border ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).border} flex items-center justify-center shadow-lg relative`}>
+                                <Calendar className={`w-5 h-5 ${getStatusConfig(selectedEvent.isArchived ? 'Archived' : selectedEvent.status).text}`} />
+                             </div>
+                             <div className="space-y-0.5">
+                                <h2 className="text-2xl font-black text-white uppercase tracking-tighter leading-tight max-w-2xl">
+                                   {selectedEvent.location || selectedEvent.title}
+                                </h2>
+                                 {(parseDescriptionSections(selectedEvent.description).clientEmail || selectedEvent.clientEmail) && (
+                                   <Link 
+                                     to="/customers"
+                                     className="px-2 py-1 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-[10px] font-mono text-indigo-400 transition-colors inline-block mt-2"
+                                   >
+                                     {parseDescriptionSections(selectedEvent.description).clientEmail || selectedEvent.clientEmail}
+                                   </Link>
+                                 )}
                              </div>
                           </div>
-                          <div className="h-8 w-px bg-white/10 mx-2" />
-                          <div className="flex gap-2">
-                             <a 
-                                href={(() => {
-                                   const oid = parseDescriptionSections(selectedEvent.description).orderId;
-                                   return oid ? `https://app.fotello.co/dashboard/listings/${oid}` : "https://app.fotello.co/dashboard/listings";
-                                })()}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded font-black text-[9px] uppercase tracking-widest transition-all shadow-lg shadow-indigo-500/20 flex items-center gap-2"
-                             >
-                                <ExternalLink className="w-3 h-3" /> Fotello
-                             </a>
-                             <button 
-                               className="px-4 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded font-black text-[9px] uppercase tracking-widest transition-all"
-                               onClick={() => setShowProjectSelect({ eventId: selectedEvent.id, x: 0, y: 0 })}
-                             >
-                                Link
-                             </button>
-                             <button 
-                               className="px-4 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded font-black text-[9px] uppercase tracking-widest transition-all"
-                             >
-                                Project
-                             </button>
+                          
+                          <div className="flex items-center gap-4">
+                             <div className="flex flex-col items-end">
+                                <div className="flex items-center gap-1.5 text-[10px] font-mono text-white/40">
+                                   <Clock className="w-3 h-3" />
+                                   {format(parseISO(selectedEvent.date), 'MMM do, yyyy @ HH:mm')}
+                                </div>
+                             </div>
+                             <div className="h-8 w-px bg-white/10 mx-2" />
+                             <div className="flex items-center gap-2">
+                                <a 
+                                   href={(() => {
+                                      const oid = parseDescriptionSections(selectedEvent.description).orderId;
+                                      return oid ? `https://app.fotello.co/dashboard/listings/${oid}` : "https://app.fotello.co/dashboard/listings";
+                                   })()}
+                                   target="_blank"
+                                   rel="noopener noreferrer"
+                                   className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded font-black text-[9px] uppercase tracking-widest transition-all shadow-lg shadow-indigo-500/20 flex items-center gap-2"
+                                >
+                                   <ExternalLink className="w-3 h-3" /> Fotello
+                                </a>
+                             </div>
                           </div>
                        </div>
                     </div>
                  </div>
 
-                 {/* Modal Tabs */}
-                 <div className="px-8 bg-[#0D0D0E]/60 border-b border-white/5 flex gap-6 shrink-0">
+                  {/* Modal Tabs */}
+                  <div className="px-8 bg-[#0D0D0E]/60 border-b border-white/5 flex gap-6 shrink-0 mt-4">
                     {[
                        { id: 'general', label: 'Order Info' },
-                       { id: 'editing', label: 'In Production' },
                        { id: 'deliver', label: 'Delivery' }
                     ].map((tab) => (
                        <button
@@ -771,34 +877,22 @@ export const CalendarView = () => {
 
                  {/* Modal Content */}
                  <div className="flex-1 overflow-y-auto custom-scrollbar p-8 bg-[#080809]">
-                    {activeTab === 'general' && (() => {
+                    {(() => {
                        const parsed = parseDescriptionSections(selectedEvent.description);
                        return (
-                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-500">
-                           {/* Left Column: Client & Order Items */}
+                          <>
+                             {activeTab === 'general' && (
+                                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 animate-in fade-in duration-500">
+                                   {/* Left Column: Client & Order Items */}
                            <div className="lg:col-span-4 space-y-6">
                               {/* Client Details Card */}
                               <div className="bg-[#121214] border border-white/5 rounded-xl p-5 relative overflow-hidden group">
                                  <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4 flex items-center gap-2">
                                     Client Details
                                  </h3>
-                                 <div className="flex justify-between items-end border-b border-white/5 pb-2 mb-4">
+                                 <div className="flex justify-between items-end border-b border-white/5 pb-2">
                                     <div className="text-[9px] uppercase font-bold text-white/20 tracking-wider">Order ID</div>
                                     <div className="text-[10px] font-mono text-indigo-400">{parsed.orderId || 'Unknown'}</div>
-                                 </div>
-                                 <div className="space-y-4 relative">
-                                    <div className="flex justify-between items-end border-b border-white/5 pb-2">
-                                       <div className="text-[9px] uppercase font-bold text-white/20 tracking-wider">Name</div>
-                                       <div className="text-xs font-bold text-white tracking-tight">{selectedEvent.clientName || 'Unspecified'}</div>
-                                    </div>
-                                    <div className="flex justify-between items-end border-b border-white/5 pb-2">
-                                       <div className="text-[9px] uppercase font-bold text-white/20 tracking-wider">Email</div>
-                                       <div className="text-[10px] font-mono text-indigo-400 truncate max-w-[150px]">{selectedEvent.clientEmail || 'N/A'}</div>
-                                    </div>
-                                    <div className="flex justify-between items-end border-b border-white/5 pb-2">
-                                       <div className="text-[9px] uppercase font-bold text-white/20 tracking-wider">Phone</div>
-                                       <div className="text-xs font-mono text-white/60">{selectedEvent.clientPhone || 'N/A'}</div>
-                                    </div>
                                  </div>
                               </div>
 
@@ -820,37 +914,20 @@ export const CalendarView = () => {
                               </div>
                            </div>
 
-                           {/* Central Column: Intake & Details */}
+                           {/* Central Column: Order Details */}
                            <div className="lg:col-span-8 space-y-6">
-                              {/* Intake Details Card */}
-                              <div className="bg-[#121214] border border-white/5 rounded-xl p-6 relative group/card overflow-hidden">
-                                 <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-6 flex items-center gap-2">
-                                    Intake Answers
-                                 </h3>
-                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6 relative">
-                                    {parsed.intake.length > 0 ? parsed.intake.map((pair: any, i: number) => (
-                                       <div key={i} className="space-y-1.5">
-                                          <div className="text-[8px] font-black text-white/25 uppercase tracking-widest leading-relaxed">
-                                             {pair.q}
-                                          </div>
-                                          <div className="text-[10px] font-black text-white uppercase tracking-tight">
-                                             {pair.a}
-                                          </div>
-                                       </div>
-                                    )) : (
-                                       <div className="col-span-2 text-[9px] text-white/20 italic py-8 border border-dashed border-white/5 rounded tracking-[0.2em] text-center">
-                                          No intake details available
-                                       </div>
-                                    )}
-                                 </div>
-                              </div>
-
                               {/* Original Order Details */}
                               <div className="bg-[#121214] border border-white/5 rounded-xl p-6 relative overflow-hidden group/intel">
-                                 <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4">
+                                 <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4 flex justify-between items-center">
                                     Original Order Details
+                                    <button 
+                                      className="px-3 py-1.5 bg-white/5 hover:bg-indigo-500/20 text-indigo-400 border border-white/10 hover:border-indigo-500/50 rounded font-black text-[9px] uppercase tracking-widest transition-all"
+                                      onClick={() => setShowProjectSelect({ eventId: selectedEvent.id, x: window.innerWidth / 2 - 128, y: window.innerHeight / 2 - 100 })}
+                                    >
+                                       Link to Project
+                                    </button>
                                  </h3>
-                                 <div className="h-[200px] overflow-y-auto custom-scrollbar p-4 bg-black/40 border border-white/5 rounded text-[10px] leading-relaxed text-white/40 font-mono shadow-inner group-hover/intel:border-white/10 transition-all">
+                                 <div className="h-[300px] overflow-y-auto custom-scrollbar p-4 bg-black/40 border border-white/5 rounded text-[10px] leading-relaxed text-white/40 font-mono shadow-inner group-hover/intel:border-white/10 transition-all">
                                     <div 
                                        dangerouslySetInnerHTML={{ 
                                           __html: selectedEvent.description 
@@ -861,114 +938,117 @@ export const CalendarView = () => {
                                     <div className="mt-8 text-[8px] text-white/10 uppercase tracking-[0.4em] text-center italic border-t border-white/5 pt-4">End of order details</div>
                                  </div>
                               </div>
+                              
+                              {/* Production Form */}
+                              <div className="bg-[#121214] border border-white/5 rounded-xl p-6 relative overflow-hidden group/intel">
+                                 <h3 className="text-[9px] font-black uppercase text-white/30 tracking-[0.3em] mb-4">
+                                    Production Details
+                                 </h3>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="space-y-6">
+                                       <div className="grid grid-cols-2 gap-4">
+                                          <div className="space-y-1.5">
+                                             <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Field Shooter</label>
+                                             <select 
+                                                value={selectedEvent.shooter || ''}
+                                                onChange={(e) => handleUpdateOrder(selectedEvent.id, { shooter: e.target.value })}
+                                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
+                                             >
+                                                <option value="">N/A</option>
+                                                <option value="Kyle">Kyle</option>
+                                                <option value="Jack">Jack</option>
+                                             </select>
+                                          </div>
+                                          <div className="space-y-1.5">
+                                             <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Live Status</label>
+                                             <select 
+                                                value={selectedEvent.status || 'Draft'}
+                                                onChange={(e) => handleUpdateOrder(selectedEvent.id, { status: e.target.value })}
+                                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
+                                             >
+                                                <option value="Draft">Draft</option>
+                                                <option value="Confirmed">Confirmed</option>
+                                                <option value="Editing">Editing</option>
+                                                <option value="Review">Review</option>
+                                                <option value="Completed">Completed</option>
+                                                <option value="Delivered">Delivered</option>
+                                             </select>
+                                          </div>
+                                       </div>
+
+                                       <div className="space-y-1.5">
+                                          <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Lead Editor</label>
+                                          <input 
+                                             type="text" 
+                                             placeholder="Assignment name..."
+                                             value={selectedEvent.editor || ''}
+                                             onChange={(e) => handleUpdateOrder(selectedEvent.id, { editor: e.target.value })}
+                                             className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
+                                          />
+                                       </div>
+
+                                       <div className="space-y-4 pt-4">
+                                          <div className="space-y-1.5">
+                                             <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Ingest Source (Raw Link)</label>
+                                             <input 
+                                                type="url" 
+                                                placeholder="Cloud storage URI"
+                                                value={selectedEvent.uploadLink || ''}
+                                                onChange={(e) => handleUpdateOrder(selectedEvent.id, { uploadLink: e.target.value })}
+                                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all font-mono"
+                                             />
+                                          </div>
+                                          <div className="space-y-1.5">
+                                             <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Final Master (Output Link)</label>
+                                             <input 
+                                                type="url" 
+                                                placeholder="Deliverable URI"
+                                                value={selectedEvent.finalLink || ''}
+                                                onChange={(e) => handleUpdateOrder(selectedEvent.id, { finalLink: e.target.value })}
+                                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all font-mono"
+                                             />
+                                          </div>
+                                       </div>
+                                    </div>
+
+                                    <div className="space-y-6">
+                                       <div className="flex items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-lg">
+                                          <input 
+                                             type="checkbox" 
+                                             checked={selectedEvent.sentMailToEditor || false}
+                                             onChange={(e) => handleUpdateOrder(selectedEvent.id, { sentMailToEditor: e.target.checked })}
+                                             className="w-4 h-4 rounded bg-black/40 border-white/10 text-indigo-500 focus:ring-0"
+                                          />
+                                          <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Editor notification sent</span>
+                                       </div>
+
+                                       <div className="space-y-4">
+                                          <div className="space-y-1.5">
+                                             <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Music Architecture</label>
+                                             <input 
+                                                type="text" 
+                                                placeholder="Ref link or track name"
+                                                value={selectedEvent.music || ''}
+                                                onChange={(e) => handleUpdateOrder(selectedEvent.id, { music: e.target.value })}
+                                                className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
+                                             />
+                                          </div>
+                                          <div className="space-y-1.5">
+                                             <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Execution Directives</label>
+                                             <textarea 
+                                                placeholder="Specific technical instructions..."
+                                                value={selectedEvent.notes || ''}
+                                                onChange={(e) => handleUpdateOrder(selectedEvent.id, { notes: e.target.value })}
+                                                className="w-full h-32 bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none resize-none transition-all"
+                                             />
+                                          </div>
+                                       </div>
+                                    </div>
+                                 </div>
+                              </div>
                            </div>
                         </div>
-                       );
-                    })()}
-
-                    {activeTab === 'editing' && (
-                       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in fade-in duration-300">
-                          <div className="space-y-6">
-                             <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-1.5">
-                                   <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Field Shooter</label>
-                                   <select 
-                                      value={selectedEvent.shooter || ''}
-                                      onChange={(e) => handleUpdateOrder(selectedEvent.id, { shooter: e.target.value })}
-                                      className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
-                                   >
-                                      <option value="">N/A</option>
-                                      <option value="Kyle">Kyle</option>
-                                      <option value="Jack">Jack</option>
-                                   </select>
-                                </div>
-                                <div className="space-y-1.5">
-                                   <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Live Status</label>
-                                   <select 
-                                      value={selectedEvent.status || 'Draft'}
-                                      onChange={(e) => handleUpdateOrder(selectedEvent.id, { status: e.target.value })}
-                                      className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
-                                   >
-                                      <option value="Draft">Draft</option>
-                                      <option value="Confirmed">Confirmed</option>
-                                      <option value="Editing">Editing</option>
-                                      <option value="Review">Review</option>
-                                      <option value="Completed">Completed</option>
-                                      <option value="Delivered">Delivered</option>
-                                   </select>
-                                </div>
-                             </div>
-
-                             <div className="space-y-1.5">
-                                <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Lead Editor</label>
-                                <input 
-                                   type="text" 
-                                   placeholder="Assignment name..."
-                                   value={selectedEvent.editor || ''}
-                                   onChange={(e) => handleUpdateOrder(selectedEvent.id, { editor: e.target.value })}
-                                   className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
-                                />
-                             </div>
-
-                             <div className="space-y-4 pt-4">
-                                <div className="space-y-1.5">
-                                   <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Ingest Source (Raw Link)</label>
-                                   <input 
-                                      type="url" 
-                                      placeholder="Cloud storage URI"
-                                      value={selectedEvent.uploadLink || ''}
-                                      onChange={(e) => handleUpdateOrder(selectedEvent.id, { uploadLink: e.target.value })}
-                                      className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all font-mono"
-                                   />
-                                </div>
-                                <div className="space-y-1.5">
-                                   <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Final Master (Output Link)</label>
-                                   <input 
-                                      type="url" 
-                                      placeholder="Deliverable URI"
-                                      value={selectedEvent.finalLink || ''}
-                                      onChange={(e) => handleUpdateOrder(selectedEvent.id, { finalLink: e.target.value })}
-                                      className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all font-mono"
-                                   />
-                                </div>
-                             </div>
-                          </div>
-
-                          <div className="space-y-6">
-                             <div className="flex items-center gap-3 p-4 bg-white/5 border border-white/5 rounded-lg">
-                                <input 
-                                   type="checkbox" 
-                                   checked={selectedEvent.sentMailToEditor || false}
-                                   onChange={(e) => handleUpdateOrder(selectedEvent.id, { sentMailToEditor: e.target.checked })}
-                                   className="w-4 h-4 rounded bg-black/40 border-white/10 text-indigo-500 focus:ring-0"
-                                />
-                                <span className="text-[10px] font-bold text-white/60 uppercase tracking-widest">Editor notification sent</span>
-                             </div>
-
-                             <div className="space-y-4">
-                                <div className="space-y-1.5">
-                                   <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Music Architecture</label>
-                                   <input 
-                                      type="text" 
-                                      placeholder="Ref link or track name"
-                                      value={selectedEvent.music || ''}
-                                      onChange={(e) => handleUpdateOrder(selectedEvent.id, { music: e.target.value })}
-                                      className="w-full bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none transition-all"
-                                   />
-                                </div>
-                                <div className="space-y-1.5">
-                                   <label className="text-[8px] uppercase font-bold text-white/30 tracking-widest">Execution Directives</label>
-                                   <textarea 
-                                      placeholder="Specific technical instructions..."
-                                      value={selectedEvent.notes || ''}
-                                      onChange={(e) => handleUpdateOrder(selectedEvent.id, { notes: e.target.value })}
-                                      className="w-full h-32 bg-black/40 border border-white/10 rounded px-3 py-2 text-[11px] text-white focus:border-indigo-500/50 outline-none resize-none transition-all"
-                                   />
-                                </div>
-                             </div>
-                          </div>
-                       </div>
-                    )}
+                       )}
 
                     {activeTab === 'deliver' && (
                        <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in duration-300">
@@ -991,7 +1071,16 @@ export const CalendarView = () => {
                                 <button 
                                   onClick={() => {
                                     const newTask = { id: uuidv4(), text: 'New Target', done: false };
-                                    const newTasks = [...(selectedEvent.tasks || []), newTask];
+                                    let currentTasks = selectedEvent.tasks || [];
+                                    if (currentTasks.length === 0) {
+                                      const parsed = parseDescriptionSections(selectedEvent.description || '');
+                                      if (parsed.items && parsed.items.length > 0) {
+                                        currentTasks = parsed.items.map((item: string, i: number) => ({ id: `item-${i}`, text: item, done: false }));
+                                      } else {
+                                        currentTasks = defaultTasks;
+                                      }
+                                    }
+                                    const newTasks = [...currentTasks, newTask];
                                     handleUpdateOrder(selectedEvent.id, { tasks: newTasks });
                                   }}
                                   className="text-[9px] uppercase font-bold text-indigo-400 hover:text-indigo-300 transition-colors"
@@ -1001,7 +1090,7 @@ export const CalendarView = () => {
                              </div>
                              
                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                {(selectedEvent.tasks && selectedEvent.tasks.length > 0 ? selectedEvent.tasks : defaultTasks).map((task: any) => (
+                                {(selectedEvent.tasks && selectedEvent.tasks.length > 0 ? selectedEvent.tasks : (parsed.items && parsed.items.length > 0 ? parsed.items.map((item, i) => ({ id: `item-${i}`, text: item, done: false })) : defaultTasks)).map((task: any) => (
                                    <div 
                                      key={task.id} 
                                      onClick={() => handleToggleTask(selectedEvent.id, task.id)}
@@ -1025,6 +1114,9 @@ export const CalendarView = () => {
                           </div>
                        </div>
                     )}
+                          </>
+                       );
+                    })()}
                  </div>
 
                   {/* Modal Footer */}
